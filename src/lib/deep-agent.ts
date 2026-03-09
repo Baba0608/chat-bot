@@ -2,7 +2,7 @@ import { ChatOllama } from "@langchain/ollama";
 import { createAgent, DynamicTool } from "langchain";
 
 const model = new ChatOllama({
-  model: "llama3.1:latest",
+  model: process.env.OLLAMA_MODEL ?? "llama3.1:latest",
   baseUrl: process.env.OLLAMA_BASE_URL ?? "http://localhost:11434",
   temperature: 0,
 });
