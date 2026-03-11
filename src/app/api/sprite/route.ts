@@ -1,7 +1,8 @@
 import { SpritesClient } from "@fly/sprites";
 import { NextResponse } from "next/server";
+import { PassThrough, Readable } from "node:stream";
 
-export async function POST() {
+export async function POST(request: Request) {
   const token = process.env.SPRITES_TOKEN;
 
   if (!token) {
@@ -12,31 +13,40 @@ export async function POST() {
   }
 
   try {
+    const body = await request.json().catch(() => ({}));
+    const command = (body.command as string) ?? "node count.js";
+
     const client = new SpritesClient(token);
 
-    // check if sprite exists and use the same sprite, else create a new one
-    let sprite = await client.getSprite("my-sprite");
-    if (!sprite) {
-      console.log("Sprite does not exist, creating new one");
-      sprite = await client.createSprite("my-sprite");
-    } else {
-      console.log("Sprite exists, using existing one");
-    }
+    const sprite = await client.getSprite("my-sprite");
 
-    const { stdout } = await sprite.exec("echo hello");
-
-    return NextResponse.json({
-      stdout: stdout,
-      stderr: "",
-      exitCode: null,
+    const [cmdName, ...args] = command.split(/\s+/);
+    const cmd = sprite.spawn(cmdName, args.length ? args : undefined, {
+      tty: false,
     });
+
+    const passThrough = new PassThrough();
+    cmd.stdout.pipe(passThrough);
+    cmd.wait().then(
+      () => passThrough.end(),
+      () => passThrough.destroy()
+    );
+
+    const webStream = Readable.toWeb(passThrough) as ReadableStream<Uint8Array>;
+    return new Response(webStream, {
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Transfer-Encoding": "chunked",
+      },
+    });
+    // const { stdout, stderr, exitCode } = await sprite.exec(command, {
+    //   tty: true,
+    // });
+    // return NextResponse.json({ stdout, stderr, exitCode });
   } catch (err) {
     return NextResponse.json(
       {
         error: err instanceof Error ? err.message : String(err),
-        stdout: null,
-        stderr: "",
-        exitCode: null,
       },
       { status: 500 }
     );

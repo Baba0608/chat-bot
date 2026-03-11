@@ -2,48 +2,43 @@
 
 import { useState } from "react";
 
-type SpriteOutput = {
-  stdout: string;
-  stderr: string;
-  exitCode: number | null;
-} | null;
-
 type ApiError = {
   error: string;
-  stdout?: string | null;
-  stderr?: string | null;
-  exitCode?: number | null;
 };
 
 export default function SpritePage() {
-  const [output, setOutput] = useState<SpriteOutput>(null);
+  const [output, setOutput] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function runSprite() {
     setLoading(true);
     setError(null);
-    setOutput(null);
+    setOutput("");
     try {
       const res = await fetch("/api/sprite", { method: "POST" });
-      const data = await res.json();
       if (!res.ok) {
-        const err = data as ApiError;
-        setError(err.error ?? "Request failed");
-        if (err.stdout != null || err.stderr != null) {
-          setOutput({
-            stdout: err.stdout ?? "",
-            stderr: err.stderr ?? "",
-            exitCode: err.exitCode ?? null,
-          });
-        }
+        const data = (await res.json().catch(() => ({}))) as ApiError;
+        setError(data.error ?? "Request failed");
         return;
       }
-      setOutput({
-        stdout: data.stdout ?? "",
-        stderr: data.stderr ?? "",
-        exitCode: data.exitCode ?? null,
-      });
+      if (!res.body) {
+        setOutput("(no output)");
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let text = "";
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          text += decoder.decode(value, { stream: true });
+          setOutput(text);
+        }
+      } finally {
+        reader.releaseLock();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to run sprite");
     } finally {
@@ -79,29 +74,14 @@ export default function SpritePage() {
             </div>
           )}
 
-          {output && (
+          {(output || loading) && (
             <div className="rounded-xl border border-stone-200 bg-white dark:border-stone-700 dark:bg-stone-900">
               <div className="border-b border-stone-200 px-4 py-2 text-xs font-medium uppercase tracking-wide text-stone-500 dark:border-stone-700 dark:text-stone-400">
                 Output
               </div>
               <pre className="overflow-x-auto p-4 font-mono text-sm text-stone-800 dark:text-stone-100">
-                {output.stdout || "(no stdout)"}
+                {output || (loading ? "…" : "(no output)")}
               </pre>
-              {output.stderr && (
-                <>
-                  <div className="border-t border-stone-200 px-4 py-2 text-xs font-medium uppercase tracking-wide text-amber-600 dark:border-stone-700 dark:text-amber-400">
-                    stderr
-                  </div>
-                  <pre className="overflow-x-auto p-4 font-mono text-sm text-amber-800 dark:text-amber-200">
-                    {output.stderr}
-                  </pre>
-                </>
-              )}
-              {output.exitCode != null && (
-                <div className="border-t border-stone-200 px-4 py-2 text-xs text-stone-500 dark:border-stone-700 dark:text-stone-400">
-                  Exit code: {output.exitCode}
-                </div>
-              )}
             </div>
           )}
         </div>

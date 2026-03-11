@@ -1,9 +1,10 @@
-import { ChatOpenAI } from "@langchain/openai";
+import { ChatOllama } from "@langchain/ollama";
 import { createAgent, DynamicTool } from "langchain";
 
-const model = new ChatOpenAI({
-  model: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
-  apiKey: process.env.OPENAI_API_KEY,
+const model = new ChatOllama({
+  model: process.env.OLLAMA_MODEL ?? "llama3.1:latest",
+  baseUrl: process.env.OLLAMA_BASE_URL ?? "http://localhost:11434",
+  temperature: 0,
 });
 
 const SYSTEM_PROMPT = `You are a helpful assistant that can answer questions and help with tasks.
