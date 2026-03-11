@@ -7,11 +7,9 @@ export const maxDuration = 60;
 export async function POST(req: Request) {
   const { messages }: { messages: UIMessage[] } = await req.json();
 
-  const graph = agent;
-
   const langchainMessages = await toBaseMessages(messages);
 
-  const stream = await graph.stream(
+  const stream = await agent.stream(
     { messages: langchainMessages },
     { streamMode: ["values", "messages"] }
   );
