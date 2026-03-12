@@ -1,0 +1,97 @@
+// Database URL is configured in prisma.config.ts (datasource.url)
+//
+// Tables are grouped as:
+// - App: chats (our chat UI / LangSmith thread_id)
+// - LangGraph checkpoint: used by @langchain/langgraph-checkpoint-postgres PostgresSaver
+//   (DeepAgents/LangGraph state). You can create them via Prisma migrate or by calling
+//   PostgresSaver.setup() and PostgresStore.setup() in code.
+// - LangGraph store: used by PostgresStore for DeepAgents long-term memory (/memories/).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// App tables
+// ---------------------------------------------------------------------------
+
+model Chat {
+  id        String   @id @default(cuid())
+  threadId  String   @unique // LangGraph/agent server thread_id
+  title     String   @default("New chat")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("chats")
+}
+
+// ---------------------------------------------------------------------------
+// LangGraph checkpoint (PostgresSaver) – thread state / checkpoints
+// ---------------------------------------------------------------------------
+
+model CheckpointMigration {
+  v Int @id
+
+  @@map("checkpoint_migrations")
+}
+
+model Checkpoint {
+  threadId           String   @map("thread_id")
+  checkpointNs       String   @default("") @map("checkpoint_ns")
+  checkpointId       String   @map("checkpoint_id")
+  parentCheckpointId String?  @map("parent_checkpoint_id")
+  type               String?
+  checkpoint         Json     @default("{}")
+  metadata           Json     @default("{}")
+
+  @@id([threadId, checkpointNs, checkpointId])
+  @@map("checkpoints")
+}
+
+model CheckpointBlob {
+  threadId     String   @map("thread_id")
+  checkpointNs String   @default("") @map("checkpoint_ns")
+  channel      String
+  version      String
+  type         String
+  blob         Bytes?
+
+  @@id([threadId, checkpointNs, channel, version])
+  @@map("checkpoint_blobs")
+}
+
+model CheckpointWrite {
+  threadId     String  @map("thread_id")
+  checkpointNs String  @default("") @map("checkpoint_ns")
+  checkpointId String  @map("checkpoint_id")
+  taskId       String  @map("task_id")
+  taskPath     String  @default("") @map("task_path")
+  idx          Int
+  channel      String
+  type         String?
+  blob         Bytes
+
+  @@id([threadId, checkpointNs, checkpointId, taskId, idx])
+  @@map("checkpoint_writes")
+}
+
+// ---------------------------------------------------------------------------
+// LangGraph store (PostgresStore) – DeepAgents long-term memory
+// ---------------------------------------------------------------------------
+
+model StoreItem {
+  id         String   @id @default(cuid())
+  namespace  String   // namespace path, e.g. assistant_id + "filesystem"
+  key        String   // key within namespace (e.g. file path without /memories/)
+  value      Json     // { content: string[], created_at, modified_at } for file data
+  createdAt  DateTime @default(now()) @map("created_at")
+  modifiedAt DateTime @updatedAt @map("modified_at")
+
+  @@unique([namespace, key])
+  @@map("store_items")
+}

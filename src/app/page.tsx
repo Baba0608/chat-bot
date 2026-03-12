@@ -2,12 +2,88 @@
 
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 
-export default function Home() {
+const THREADS_STORAGE_KEY = "chat-threads";
+
+export type ThreadItem = { id: string; title: string };
+
+function getStoredThreads(): ThreadItem[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(THREADS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function storeThreads(threads: ThreadItem[]) {
+  try {
+    localStorage.setItem(THREADS_STORAGE_KEY, JSON.stringify(threads));
+  } catch {
+    // ignore
+  }
+}
+
+function getLastUserMessageText(messages: { parts: { type: string; text?: string }[] }[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg?.parts) {
+      const text = msg.parts
+        .filter((p): p is { type: string; text: string } => p?.type === "text" && typeof (p as { text?: string }).text === "string")
+        .map((p) => p.text)
+        .join("")
+        .trim();
+      if (text) return text.slice(0, 80);
+    }
+  }
+  return "New chat";
+}
+
+function ChatArea({
+  threadId,
+  onThreadCreated,
+}: {
+  threadId: string | null;
+  onThreadCreated: (id: string, title: string) => void;
+}) {
+  const pendingTitleRef = useRef<string>("New chat");
+  const onThreadCreatedRef = useRef(onThreadCreated);
+  onThreadCreatedRef.current = onThreadCreated;
+
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport({
+        api: "/api/chat",
+        prepareSendMessagesRequest: ({ messages, body }) => {
+          const lastText = getLastUserMessageText(messages as { parts: { type: string; text?: string }[] }[]);
+          pendingTitleRef.current = lastText || "New chat";
+          return {
+            body: {
+              ...(typeof body === "object" && body !== null ? body : {}),
+              messages,
+              ...(threadId ? { threadId } : {}),
+            },
+          };
+        },
+        fetch: async (url, init) => {
+          const res = await fetch(url, init);
+          const newThreadId = res.headers.get("x-thread-id");
+          if (newThreadId) {
+            const title = pendingTitleRef.current || "New chat";
+            onThreadCreatedRef.current(newThreadId, title);
+          }
+          return res;
+        },
+      }),
+    [threadId]
+  );
+
   const { messages, sendMessage, status, error, stop } = useChat({
-    // Cast needed when pnpm hoists multiple 'ai' versions; runtime uses ai@6
-    transport: new DefaultChatTransport({ api: "/api/chat" }),
+    transport,
   });
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -19,16 +95,7 @@ export default function Home() {
   const loading = status === "submitted" || status === "streaming";
 
   return (
-    <div className="flex h-screen flex-col bg-stone-100 dark:bg-stone-950">
-      <header className="shrink-0 border-b border-stone-200 bg-white/80 px-4 py-3 backdrop-blur dark:border-stone-800 dark:bg-stone-900/80">
-        <h1 className="text-lg font-semibold tracking-tight text-stone-800 dark:text-stone-100">
-          Chat
-        </h1>
-        <p className="text-xs text-stone-500 dark:text-stone-400">
-          Powered by Llama 3.1 (local) · AI SDK
-        </p>
-      </header>
-
+    <>
       <div className="flex-1 overflow-y-auto px-4 py-6">
         <div className="mx-auto max-w-2xl space-y-6">
           {messages.length === 0 && (
@@ -135,6 +202,81 @@ export default function Home() {
           )}
         </div>
       </form>
+    </>
+  );
+}
+
+export default function Home() {
+  const [threads, setThreads] = useState<ThreadItem[]>([]);
+  const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setThreads(getStoredThreads());
+  }, []);
+
+  const handleThreadCreated = (id: string, title: string) => {
+    setCurrentThreadId(id);
+    setThreads((prev) => {
+      const next = [{ id, title }, ...prev.filter((t) => t.id !== id)];
+      storeThreads(next);
+      return next;
+    });
+  };
+
+  const startNewChat = () => setCurrentThreadId(null);
+
+  return (
+    <div className="flex h-screen bg-stone-100 dark:bg-stone-950">
+      {/* Sidebar */}
+      <aside className="flex w-64 shrink-0 flex-col border-r border-stone-200 bg-white dark:border-stone-800 dark:bg-stone-900">
+        <div className="flex items-center gap-2 border-b border-stone-200 p-3 dark:border-stone-800">
+          <button
+            type="button"
+            onClick={startNewChat}
+            className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-stone-300 bg-white px-3 py-2.5 text-sm font-medium text-stone-700 transition hover:bg-stone-50 dark:border-stone-600 dark:bg-stone-800 dark:text-stone-200 dark:hover:bg-stone-800"
+          >
+            <span aria-hidden>+</span>
+            New chat
+          </button>
+        </div>
+        <nav className="flex-1 overflow-y-auto p-2">
+          <ul className="space-y-0.5">
+            {threads.map((thread) => (
+              <li key={thread.id}>
+                <button
+                  type="button"
+                  onClick={() => setCurrentThreadId(thread.id)}
+                  className={`w-full rounded-lg px-3 py-2.5 text-left text-sm transition ${
+                    currentThreadId === thread.id
+                      ? "bg-stone-200 text-stone-900 dark:bg-stone-700 dark:text-stone-100"
+                      : "text-stone-600 hover:bg-stone-100 dark:text-stone-400 dark:hover:bg-stone-800"
+                  }`}
+                >
+                  <span className="line-clamp-2 block truncate">{thread.title}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      </aside>
+
+      {/* Main chat */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="shrink-0 border-b border-stone-200 bg-white/80 px-4 py-3 backdrop-blur dark:border-stone-800 dark:bg-stone-900/80">
+          <h1 className="text-lg font-semibold tracking-tight text-stone-800 dark:text-stone-100">
+            Chat
+          </h1>
+          <p className="text-xs text-stone-500 dark:text-stone-400">
+            Powered by Llama 3.1 (local) · AI SDK
+          </p>
+        </header>
+
+        <ChatArea
+          key={currentThreadId ?? "new"}
+          threadId={currentThreadId}
+          onThreadCreated={handleThreadCreated}
+        />
+      </div>
     </div>
   );
 }
