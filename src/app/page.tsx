@@ -7,28 +7,13 @@ import { useState, useRef, useEffect, useMemo } from "react";
 
 const THREAD_SEARCH_PARAM = "thread";
 
-const THREADS_STORAGE_KEY = "chat-threads";
-
 export type ThreadItem = { id: string; title: string };
 
-function getStoredThreads(): ThreadItem[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = localStorage.getItem(THREADS_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function storeThreads(threads: ThreadItem[]) {
-  try {
-    localStorage.setItem(THREADS_STORAGE_KEY, JSON.stringify(threads));
-  } catch {
-    // ignore
-  }
+async function fetchChats(): Promise<ThreadItem[]> {
+  const res = await fetch("/api/chats");
+  if (!res.ok) return [];
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
 }
 
 function getLastUserMessageText(messages: { parts: { type: string; text?: string }[] }[]): string {
@@ -229,7 +214,13 @@ export default function Home() {
   });
 
   useEffect(() => {
-    setThreads(getStoredThreads());
+    let cancelled = false;
+    fetchChats().then((list) => {
+      if (!cancelled) setThreads(list);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Sync state from URL on popstate (back/forward) so the sidebar selection matches the URL
@@ -259,9 +250,13 @@ export default function Home() {
     // Only add the thread to the sidebar; do NOT set currentThreadId here.
     // Otherwise the ChatArea key would change, remounting the component and
     // wiping the streamed response before it can be displayed.
+    fetch("/api/chats", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ threadId: id, title }),
+    }).catch(() => {});
     setThreads((prev) => {
       const next = [{ id, title }, ...prev.filter((t) => t.id !== id)];
-      storeThreads(next);
       return next;
     });
   };
