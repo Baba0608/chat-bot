@@ -4,6 +4,7 @@ import {
   createUIMessageStreamResponse,
   UIMessage,
 } from "ai";
+import { saveCheckpoint } from "@/lib/checkpoint";
 import {
   consumeLangGraphSSE,
   TEXT_ID,
@@ -101,7 +102,13 @@ export async function POST(req: Request) {
     execute: async ({ writer }) => {
       writer.write({ type: "start" });
       writer.write({ type: "text-start", id: TEXT_ID });
-      await consumeLangGraphSSE(rawStream, writer as StreamWriter);
+      await consumeLangGraphSSE(rawStream, writer as StreamWriter, {
+        onValues: (payload) => {
+          if (threadId) {
+            saveCheckpoint(threadId, payload).catch(() => {});
+          }
+        },
+      });
       writer.write({ type: "text-end", id: TEXT_ID });
       writer.write({ type: "finish" });
     },

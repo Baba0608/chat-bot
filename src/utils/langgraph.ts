@@ -36,10 +36,17 @@ export type StreamWriter = {
   write: (part: { type: string; id?: string; delta?: string }) => void;
 };
 
+export type ConsumeLangGraphSSEOptions = {
+  /** Called when a "values" event is received (full state). Use to persist checkpoint. */
+  onValues?: (payload: Record<string, unknown>) => void;
+};
+
 export async function consumeLangGraphSSE(
   byteStream: ReadableStream<Uint8Array>,
-  writer: StreamWriter
+  writer: StreamWriter,
+  options: ConsumeLangGraphSSEOptions = {}
 ): Promise<void> {
+  const { onValues } = options;
   const decoder = new TextDecoder();
   let buffer = "";
   let lastValuesData: Record<string, unknown> | null = null;
@@ -138,6 +145,7 @@ export async function consumeLangGraphSSE(
           }
         } else if (type === "values" && payload && typeof payload === "object") {
           lastValuesData = payload as Record<string, unknown>;
+          onValues?.(lastValuesData);
           const messages = lastValuesData.messages;
           if (Array.isArray(messages)) {
             for (let i = messages.length - 1; i >= 0; i--) {
@@ -187,6 +195,10 @@ export async function consumeLangGraphSSE(
           break;
         }
       }
+    }
+
+    if (lastValuesData && onValues) {
+      onValues(lastValuesData);
     }
   } finally {
     reader.releaseLock();
