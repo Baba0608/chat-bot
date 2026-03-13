@@ -2,7 +2,10 @@
 
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useState, useRef, useEffect, useMemo } from "react";
+
+const THREAD_SEARCH_PARAM = "thread";
 
 const THREADS_STORAGE_KEY = "chat-threads";
 
@@ -46,13 +49,20 @@ function getLastUserMessageText(messages: { parts: { type: string; text?: string
 function ChatArea({
   threadId,
   onThreadCreated,
+  onThreadIdInUrl,
 }: {
   threadId: string | null;
   onThreadCreated: (id: string, title: string) => void;
+  onThreadIdInUrl?: (id: string) => void;
 }) {
   const pendingTitleRef = useRef<string>("New chat");
   const onThreadCreatedRef = useRef(onThreadCreated);
   onThreadCreatedRef.current = onThreadCreated;
+  const onThreadIdInUrlRef = useRef(onThreadIdInUrl);
+  onThreadIdInUrlRef.current = onThreadIdInUrl;
+  // When we get a new thread id from the server, we must not change the component key
+  // (so we don't remount and lose the streamed response). Use this ref for subsequent requests.
+  const serverThreadIdRef = useRef<string | null>(null);
 
   const transport = useMemo(
     () =>
@@ -61,11 +71,12 @@ function ChatArea({
         prepareSendMessagesRequest: ({ messages, body }) => {
           const lastText = getLastUserMessageText(messages as { parts: { type: string; text?: string }[] }[]);
           pendingTitleRef.current = lastText || "New chat";
+          const effectiveThreadId = threadId ?? serverThreadIdRef.current;
           return {
             body: {
               ...(typeof body === "object" && body !== null ? body : {}),
               messages,
-              ...(threadId ? { threadId } : {}),
+              ...(effectiveThreadId ? { threadId: effectiveThreadId } : {}),
             },
           };
         },
@@ -73,8 +84,10 @@ function ChatArea({
           const res = await fetch(url, init);
           const newThreadId = res.headers.get("x-thread-id");
           if (newThreadId) {
+            serverThreadIdRef.current = newThreadId;
             const title = pendingTitleRef.current || "New chat";
             onThreadCreatedRef.current(newThreadId, title);
+            onThreadIdInUrlRef.current?.(newThreadId);
           }
           return res;
         },
@@ -207,15 +220,45 @@ function ChatArea({
 }
 
 export default function Home() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [threads, setThreads] = useState<ThreadItem[]>([]);
-  const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);
+  const [currentThreadId, setCurrentThreadId] = useState<string | null>(() => {
+    const t = searchParams.get(THREAD_SEARCH_PARAM);
+    return t === "" || t === null ? null : t;
+  });
 
   useEffect(() => {
     setThreads(getStoredThreads());
   }, []);
 
+  // Sync state from URL on popstate (back/forward) so the sidebar selection matches the URL
+  useEffect(() => {
+    const onPopState = () => {
+      const params = new URLSearchParams(window.location.search);
+      const t = params.get(THREAD_SEARCH_PARAM);
+      setCurrentThreadId(t === "" || t === null ? null : t);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  const setThreadInUrl = (id: string | null) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (id) {
+      params.set(THREAD_SEARCH_PARAM, id);
+    } else {
+      params.delete(THREAD_SEARCH_PARAM);
+    }
+    const query = params.toString();
+    const path = query ? `${window.location.pathname}?${query}` : window.location.pathname;
+    router.replace(path, { scroll: false });
+  };
+
   const handleThreadCreated = (id: string, title: string) => {
-    setCurrentThreadId(id);
+    // Only add the thread to the sidebar; do NOT set currentThreadId here.
+    // Otherwise the ChatArea key would change, remounting the component and
+    // wiping the streamed response before it can be displayed.
     setThreads((prev) => {
       const next = [{ id, title }, ...prev.filter((t) => t.id !== id)];
       storeThreads(next);
@@ -223,7 +266,19 @@ export default function Home() {
     });
   };
 
-  const startNewChat = () => setCurrentThreadId(null);
+  const handleThreadIdInUrl = (id: string) => {
+    setThreadInUrl(id);
+  };
+
+  const startNewChat = () => {
+    setCurrentThreadId(null);
+    setThreadInUrl(null);
+  };
+
+  const selectThread = (id: string) => {
+    setCurrentThreadId(id);
+    setThreadInUrl(id);
+  };
 
   return (
     <div className="flex h-screen bg-stone-100 dark:bg-stone-950">
@@ -245,7 +300,7 @@ export default function Home() {
               <li key={thread.id}>
                 <button
                   type="button"
-                  onClick={() => setCurrentThreadId(thread.id)}
+                  onClick={() => selectThread(thread.id)}
                   className={`w-full rounded-lg px-3 py-2.5 text-left text-sm transition ${
                     currentThreadId === thread.id
                       ? "bg-stone-200 text-stone-900 dark:bg-stone-700 dark:text-stone-100"
@@ -275,6 +330,7 @@ export default function Home() {
           key={currentThreadId ?? "new"}
           threadId={currentThreadId}
           onThreadCreated={handleThreadCreated}
+          onThreadIdInUrl={handleThreadIdInUrl}
         />
       </div>
     </div>
